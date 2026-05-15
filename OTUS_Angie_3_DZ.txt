@@ -1,0 +1,68 @@
+## DZ_3.1
+# Добавим репо angie
+tee /etc/yum.repos.d/angie.repo<<EOF
+[angie]
+name=Angie repo
+baseurl=https://download.angie.software/angie/oracle/$releasever/
+gpgcheck=1
+enabled=1
+gpgkey=https://angie.software/keys/angie-signing.gpg.asc
+EOF
+
+# Установим пакет angie и модули
+yum makecache &&\
+yum install -y angie angie-module-brotli angie-module-auth-ldap
+
+# Подключим модули в контексте main{} в /etc/angie/angie.conf
+load_module modules/ngx_http_brotli_filter_module.so;
+load_module modules/ngx_http_auth_ldap_module.so;
+
+# Проверим конфигурацию
+angie -t
+
+# Включим в автозагрузку и запустим angie
+systemctl enable --now angie.service &&\
+systemctl status angie.service &&\
+echo "angie started" || echo "!!angie not started"
+# Вывод консоли
+● angie.service - Angie - high performance web server
+     Loaded: loaded (/usr/lib/systemd/system/angie.service; enabled; preset: disabled)
+     Active: active (running) since Fri 2026-05-15 03:26:23 MSK; 8min ago
+       Docs: https://en.angie.software/angie/docs/
+   Main PID: 3823540 (angie)
+      Tasks: 3 (limit: 8820)
+     Memory: 57.9M (peak: 59.9M)
+        CPU: 36ms
+     CGroup: /system.slice/angie.service
+             ├─3823540 "angie: master process v1.11.4 #1 [/usr/sbin/angie -c /etc/angie/angie.conf]"
+             ├─3823541 "angie: worker process #1"
+             └─3823542 "angie: worker process #1"
+
+May 15 03:26:23 angie-test1 systemd[1]: Starting Angie - high performance web server...
+May 15 03:26:23 angie-test1 systemd[1]: Started Angie - high performance web server.
+angie started
+
+
+## DZ_3.2
+# Запустим docker контейнер с параметрами
+docker run --rm --name angie \
+  -v $(pwd)/html:/usr/share/angie/html:ro \
+  -v $(pwd)/angie.conf:/etc/angie/angie.conf:ro -p 8080:80 \
+  -d docker.angie.software/angie:latest
+
+# Проверим запуск контейнера
+docker ps
+CONTAINER ID   IMAGE                                COMMAND                  CREATED          STATUS          PORTS                  NAMES
+7c57e34b03d4   docker.angie.software/angie:latest   "angie -g 'daemon of…"   32 seconds ago   Up 31 seconds   0.0.0.0:8080->80/tcp   angie
+
+# Проверим, что есть доступ
+curl -I localhost:8080
+HTTP/1.1 200 OK
+Server: Angie/1.11.5
+Date: Fri, 15 May 2026 11:57:38 GMT
+Content-Type: text/html
+Content-Length: 546
+Last-Modified: Wed, 25 Mar 2026 11:01:22 GMT
+Connection: keep-alive
+ETag: "69c3c082-222"
+Accept-Ranges: bytes
