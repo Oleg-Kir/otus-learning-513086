@@ -1,0 +1,152 @@
+## docker-compose.yml
+services:
+  db:
+    image: mysql:8.0
+    container_name: db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MYSQL_DATABASE=wordpress
+      - MYSQL_HOST_CACHE_SIZE=0
+    volumes:
+      - dbdata:/var/lib/mysql
+    command: '--default-authentication-plugin=mysql_native_password'
+    networks:
+      - app-network
+
+  wordpress:
+    depends_on:
+      - db
+    image: wordpress:6.0.1-php8.0-fpm-alpine
+    container_name: wordpress
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - WORDPRESS_DB_HOST=db:3306
+      - WORDPRESS_DB_USER=$MYSQL_USER
+      - WORDPRESS_DB_PASSWORD=$MYSQL_PASSWORD
+      - WORDPRESS_DB_NAME=wordpress
+    volumes:
+      - wordpress:/var/www/html
+    networks:
+      - app-network
+
+  webserver:
+    depends_on:
+      - wordpress
+    image: 'docker.angie.software/angie:1.11.6-alpine'
+    container_name: webserver
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - wordpress:/var/www/html
+      - ./angie-http:/etc/angie/http.d
+    networks:
+      - app-network
+volumes:
+  wordpress:
+  dbdata:
+
+networks:
+  app-network:
+    driver: bridge
+
+## angie.conf
+user  angie;
+worker_processes  auto;
+worker_rlimit_nofile 65536;
+
+error_log  /var/log/angie/error.log notice;
+pid        /run/angie.pid;
+
+events {
+    worker_connections  65536;
+}
+
+http {
+    include       /etc/angie/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    log_format extended '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" rt="$request_time" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'h="$host" sn="$server_name" ru="$request_uri" u="$uri" '
+                        'ucs="$upstream_cache_status" ua="$upstream_addr" us="$upstream_status" '
+                        'uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+    access_log  /var/log/angie/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    include /etc/angie/http.d/*.conf;
+}
+
+## http.d/default.conf
+server {
+    listen 80;
+    server_name _;
+
+    index index.php index.html index.htm;
+    root /var/www/html;
+
+    location ~ /.well-known/acme-challenge {
+        allow all;
+        root /var/www/html;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php$is_args$args;
+    }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass wordpress:9000;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    location = /favicon.ico {
+        log_not_found off; access_log off;
+    }
+
+    location = /robots.txt {
+        log_not_found off; access_log off; allow all;
+    }
+
+    location ~* \.(css|gif|ico|jpeg|jpg|js|png)$ {
+        expires max;
+        log_not_found off;
+    }
+}
+
+## logs
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:01 +0000] "GET /wp-admin HTTP/1.1" 301 169 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
+webserver  | 10.216.1.1 - - [28/May/2026:18:19:01 +0000] "POST /wp-cron.php?doing_wp_cron=1779992341.8883650302886962890625 HTTP/1.1" 200 5 "http://10.97.138.141/wp-cron.php?doing_wp_cron=1779992341.8883650302886962890625" "WordPress/6.0.1; http://10.97.138.141" "-"
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:01 +0000 "GET /wp-admin/index.php" 200
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:01 +0000] "GET /wp-admin/ HTTP/1.1" 200 66876 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:01 +0000 "POST /wp-cron.php" 200
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:02 +0000 "GET /wp-admin/load-styles.php" 200
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:02 +0000] "GET /wp-admin/load-styles.php?c=1&dir=ltr&load%5Bchunk_0%5D=dashicons,admin-bar,site-health,common,forms,admin-menu,dashboard,list-tables,edit,revisions,media,themes,about,nav-menus,wp-poi&load%5Bchunk_1%5D=nter,widgets,site-icon,l10n,buttons,wp-auth-check&ver=6.0.1 HTTP/1.1" 200 394460 "http://10.97.138.141/wp-admin/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:02 +0000 "GET /wp-admin/load-scripts.php" 200
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:02 +0000 "GET /wp-admin/load-scripts.php" 200
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:02 +0000] "GET /wp-admin/load-scripts.php?c=1&load%5Bchunk_0%5D=jquery-core,jquery-migrate,utils&ver=6.0.1 HTTP/1.1" 200 102738 "http://10.97.138.141/wp-admin/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:02 +0000] "GET /wp-admin/load-scripts.php?c=1&load%5Bchunk_0%5D=hoverIntent,regenerator-runtime,wp-polyfill,wp-hooks&ver=6.0.1 HTTP/1.1" 200 32074 "http://10.97.138.141/wp-admin/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
+wordpress  | 10.216.1.4 -  28/May/2026:18:19:02 +0000 "POST /wp-admin/admin-ajax.php" 200
+webserver  | 172.18.125.54 - - [28/May/2026:18:19:02 +0000] "POST /wp-admin/admin-ajax.php HTTP/1.1" 200 140 "http://10.97.138.141/wp-admin/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36" "-"
