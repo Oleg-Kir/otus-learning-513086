@@ -1,0 +1,169 @@
+## docker-compose.yml
+services:
+  debug-white:
+    image: vscoder/webdebugger
+    container_name: debug-white
+    restart: unless-stopped
+    environment:
+      APP_DELAY: 0
+      APP_PORT: 8080
+      APP_BGCOLOR: white
+    ports:
+      - "8001:8080"
+  debug-blue:
+    image: vscoder/webdebugger
+    container_name: debug-blue
+    restart: unless-stopped
+    environment:
+      APP_DELAY: 0
+      APP_PORT: 8080
+      APP_BGCOLOR: skyblue
+    ports:
+      - "8002:8080"
+  debug-green:
+    image: vscoder/webdebugger
+    container_name: debug-green
+    restart: unless-stopped
+    environment:
+      APP_DELAY: 0
+      APP_PORT: 8080
+      APP_BGCOLOR: limegreen
+    ports:
+      - "8003:8080"
+  debug-gold:
+    image: vscoder/webdebugger
+    container_name: debug-gold
+    restart: unless-stopped
+    environment:
+      APP_DELAY: 0
+      APP_PORT: 8080
+      APP_BGCOLOR: gold
+    ports:
+      - "8004:8080"
+
+## angie.conf
+user  angie;
+worker_processes  auto;
+worker_rlimit_nofile 65536;
+
+error_log  /var/log/angie/error.log notice;
+pid        /run/angie.pid;
+
+events {
+    worker_connections  65536;
+}
+
+
+http {
+    include       /etc/angie/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    log_format extended '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" rt="$request_time" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'h="$host" sn="$server_name" ru="$request_uri" u="$uri" '
+                        'ucs="$upstream_cache_status" ua="$upstream_addr" us="$upstream_status" '
+                        'uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+    access_log  /var/log/angie/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    include /etc/angie/http.d/*.conf;
+}
+
+#stream {
+#    include /etc/angie/stream.d/*.conf;
+#}
+
+## http.d/http_upstream.conf
+## 1. RoundRobin
+upstream backend_docker{
+  zone backend_docker 20m;
+  server 127.0.0.1:8001;
+  server 127.0.0.1:8002;
+  server 127.0.0.1:8003;
+  server 127.0.0.1:8004;
+}
+
+server {
+  listen 8080 default_server reuseport;
+  server_name _;
+  location / {
+    proxy_pass http://backend_docker;
+  }
+
+  location /favicon {
+  }
+}
+
+## 2. Hash
+upstream backend_docker{
+  zone backend_docker 20m;
+  hash $uri consistent;
+  server 127.0.0.1:8001;
+  server 127.0.0.1:8002;
+  server 127.0.0.1:8003;
+  server 127.0.0.1:8004;
+}
+
+server {
+  listen 8080 default_server reuseport;
+  server_name _;
+  location / {
+    proxy_pass http://backend_docker;
+  }
+
+  location /favicon {
+  }
+}
+
+## 3. Random
+upstream backend_docker{
+  zone backend_docker 20m;
+  random;
+  server 127.0.0.1:8001;
+  server 127.0.0.1:8002;
+  server 127.0.0.1:8003;
+  server 127.0.0.1:8004;
+}
+
+server {
+  listen 8080 default_server reuseport;
+  server_name _;
+  location / {
+    proxy_pass http://backend_docker;
+  }
+
+  location /favicon {
+  }
+}
+
+## Backup-Down
+upstream backend_docker{
+  zone backend_docker 20m;
+  server 127.0.0.1:8001 down;
+  server 127.0.0.1:8002;
+  server 127.0.0.1:8003 backup;
+  server 127.0.0.1:8004;
+}
+
+server {
+  listen 8080 default_server reuseport;
+  server_name _;
+  location / {
+    proxy_pass http://backend_docker;
+  }
+
+  location /favicon {
+  }
+}
