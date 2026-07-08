@@ -1,0 +1,87 @@
+########################################
+# Сгенерирован самоподписной сертификат
+# angie-test1-cert.pem
+# angie-test1-key.pem
+########################################
+
+## angie.conf
+user  angie;
+worker_processes  auto;
+worker_rlimit_nofile 65536;
+
+error_log  /var/log/angie/error.log notice;
+pid        /run/angie.pid;
+
+events {
+    worker_connections  65536;
+}
+
+
+http {
+    include       /etc/angie/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    log_format extended '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" rt="$request_time" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'h="$host" sn="$server_name" ru="$request_uri" u="$uri" '
+                        'ucs="$upstream_cache_status" ua="$upstream_addr" us="$upstream_status" '
+                        'uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+    access_log  /var/log/angie/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    include /etc/angie/http.d/*.conf;
+}
+#stream {
+#    include /etc/angie/stream.d/*.conf;
+#}
+
+########################################
+
+## http.d/https.conf
+server {
+    listen       8000;
+    server_name  _;
+    return 301 https://$host:8443$request_uri;
+}
+server {
+    listen       8443 ssl;
+    listen       8443 quic reuseport;
+
+    add_header Alt-Svc 'h3=":443"; ma=86400';
+    add_header Strict-Transport-Security max-age=86400;
+
+    ssl_certificate     /etc/angie/ssl/angie-test1-cert.pem;
+    ssl_certificate_key /etc/angie/ssl/angie-test1-key.pem;
+    ssl_session_cache   shared:TLS:10m;
+    ssl_session_timeout 24h;
+
+    server_name  _;
+
+    http2        on;
+    http3        on;
+
+    #access_log  /var/log/angie/host.access.log  main;
+
+    location / {
+        root   /usr/share/angie/html;
+        index  index.html index.htm;
+    }
+
+    location /status/ {
+        api     /status/;
+        allow   127.0.0.1;
+        deny    all;
+    }
+}
