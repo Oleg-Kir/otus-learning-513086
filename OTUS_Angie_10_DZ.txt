@@ -1,0 +1,155 @@
+## docker-compose.yml
+services:
+  db:
+    image: mysql:8.0
+    container_name: db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MYSQL_DATABASE=wordpress
+      - MYSQL_HOST_CACHE_SIZE=0
+    volumes:
+      - dbdata:/var/lib/mysql
+    command: '--default-authentication-plugin=mysql_native_password'
+    networks:
+      - app-network
+
+  wordpress:
+    depends_on:
+      - db
+    image: wordpress:6.0.1-php8.0-fpm-alpine
+    container_name: wordpress
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - WORDPRESS_DB_HOST=db:3306
+      - WORDPRESS_DB_USER=$MYSQL_USER
+      - WORDPRESS_DB_PASSWORD=$MYSQL_PASSWORD
+      - WORDPRESS_DB_NAME=wordpress
+    volumes:
+      - wordpress:/var/www/html
+    networks:
+      - app-network
+
+  webserver:
+    depends_on:
+      - wordpress
+    image: 'central-mirror-cache.services.mts.ru/angie:1.11.6-alpine'
+#    image: 'docker.angie.software/angie:1.11.6-alpine'
+    container_name: webserver
+    restart: unless-stopped
+    ports:
+      - "8008:80"
+    volumes:
+      - wordpress:/var/www/html
+      - webserver:/var/www/cache
+      - ./angie-conf/angie.conf:/etc/angie/angie.conf
+      - ./angie-http:/etc/angie/http.d
+    networks:
+      - app-network
+volumes:
+  webserver:
+  wordpress:
+  dbdata:
+
+networks:
+  app-network:
+    driver: bridge
+
+######################################
+
+## angie.conf
+user  angie;
+worker_processes  auto;
+worker_rlimit_nofile 65536;
+
+error_log  /var/log/angie/error.log notice;
+pid        /run/angie.pid;
+
+events {
+    worker_connections  65536;
+}
+
+http {
+    include       /etc/angie/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    log_format extended '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" rt="$request_time" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'h="$host" sn="$server_name" ru="$request_uri" u="$uri" '
+                        'ucs="$upstream_cache_status" ua="$upstream_addr" us="$upstream_status" '
+                        'uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+    access_log  /var/log/angie/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    fastcgi_cache_key $scheme$host$request_uri;
+    fastcgi_cache_path /var/www/cache levels=1:2 keys_zone=one_page:10m inactive=24h max_size=100m;
+
+    keepalive_timeout  65;
+
+    gzip  on;
+
+    include /etc/angie/http.d/*.conf;
+}
+
+######################################
+
+## default.conf
+server {
+    listen 80;
+    server_name _;
+
+    index index.php index.html index.htm;
+    root /var/www/html;
+
+    location ~ /.well-known/acme-challenge {
+        allow all;
+        root /var/www/html;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php$is_args$args;
+    }
+
+    location ~ \.php$ {
+        fastcgi_cache one_page;
+        fastcgi_cache_valid 200 120s;
+        fastcgi_cache_lock on;
+        fastcgi_ignore_headers "X-Accel-Expires" "Expires" "Cache-Control";
+        add_header X-cache-status $upstream_cache_status;
+        add_header X-cache-key $scheme$host$uri;
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass wordpress:9000;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+
+    location = /favicon.ico {
+        log_not_found off; access_log off;
+    }
+
+    location = /robots.txt {
+        log_not_found off; access_log off; allow all;
+    }
+
+    location ~* \.(css|gif|ico|jpeg|jpg|js|png)$ {
+        expires max;
+        log_not_found off;
+    }
+}
