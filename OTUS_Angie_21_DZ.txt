@@ -1,0 +1,196 @@
+####### /etc/angie/angie.conf #######
+user  angie;
+worker_processes  auto;
+worker_rlimit_nofile 65536;
+
+error_log  /var/log/angie/error.log notice;
+pid        /run/angie.pid;
+
+events {
+    worker_connections  65536;
+}
+
+http {
+    include       /etc/angie/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    log_format extended '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" rt="$request_time" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'h="$host" sn="$server_name" ru="$request_uri" u="$uri" '
+                        'ucs="$upstream_cache_status" ua="$upstream_addr" us="$upstream_status" '
+                        'uct="$upstream_connect_time" urt="$upstream_response_time"';
+
+    access_log  /var/log/angie/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    limit_req_zone $server_name zone=limit_perserver:10m rate=500r/s;
+    limit_req_zone $binary_remote_addr zone=limit_perip:10m rate=50r/s;
+
+    include /etc/angie/http.d/*.conf;
+}
+
+#stream {
+#    include /etc/angie/stream.d/*.conf;
+#}
+##############
+
+####### /etc/angie/http.d/http_upstream.conf #######
+upstream backend_docker{
+  zone backend_docker 20m;
+  server 127.0.0.1:8001;
+  server 127.0.0.1:8002;
+  server 127.0.0.1:8003;
+  server 127.0.0.1:8004;
+}
+
+server {
+  listen 8080 default_server reuseport;
+  server_name _;
+
+  status_zone http_upstream;
+
+  location / {
+    status_zone location_root;
+
+    limit_req zone=limit_perip burst=100 nodelay;
+
+    proxy_pass http://backend_docker;
+  }
+
+  location /favicon {
+  }
+
+  location /console/ {
+    # define list of trusted hosts or networks
+    # allow 127.0.0.1;
+    # allow 192.168.0.0/16;
+    satisfy any;
+    allow 10.0.0.0/8;
+    deny all;
+
+    auth_basic "Auth enabled. Please enter login/password";
+    auth_basic_user_file /et/angie/htpasswd;
+
+    auto_redirect on;
+
+    alias /usr/share/angie-console-light/html/;
+    index index.html;
+
+    location /console/api/ {
+        api /status/;
+    }
+
+    # uncomment below lines to enable writable API
+    # location /console/api/config/ {
+    #     api /config/;
+    # }
+  }
+}
+##############
+
+####### /etc/fail2ban/jail.local #######
+# To use more aggressive http-auth modes set filter parameter "mode" in jail.local:
+# normal (default), aggressive (combines all), auth or fallback
+# See "tests/files/logs/nginx-http-auth" or "filter.d/nginx-http-auth.conf" for usage example and details.
+[nginx-http-auth]
+# mode = normal
+port    = http,https
+logpath = %(nginx_error_log)s
+
+# To use 'nginx-limit-req' jail you should have `ngx_http_limit_req_module`.
+# and define `limit_req` and `limit_req_zone` as described in nginx documentation
+# http://nginx.org/en/docs/http/ngx_http_limit_req_module.html
+# or for example see in 'config/filter.d/nginx-limit-req.conf'
+[nginx-limit-req]
+port    = http,https
+enabled = true
+filter = nginx-limit-req
+action = iptables-multiport[name=ReqLimit, port="http,https", protocol=tcp]
+logpath = /var/log/angie/*error.log
+findtime = 600
+bantime = 3600
+maxretry = 4
+
+[nginx-botsearch]
+
+port     = http,https
+logpath  = %(nginx_error_log)s
+
+[nginx-bad-request]
+port    = http,https
+logpath = %(nginx_access_log)s
+
+[nginx-forbidden]
+port     = http,https
+logpath  = %(nginx_error_log)s
+##############
+
+####### /etc/fail2ban/filter.d/nginx-limit-req.conf #######
+[INCLUDES]
+
+before = nginx-error-common.conf
+
+[Definition]
+
+# Specify following expression to define exact zones, if you want to ban IPs limited
+# from specified zones only.
+# Example:
+#
+#   ngx_limit_req_zones = lr_zone|lr_zone2
+#
+ngx_limit_req_zones = [^"]+
+
+# Depending on limit_req_log_level directive (may be: info | notice | warn | error):
+__err_type = [a-z]+
+
+# Shortly, much faster and stable version of regexp:
+#failregex = ^%(__prefix_line)slimiting requests, excess: [\d\.]+ by zone "(?:%(ngx_limit_req_zones)s)", client: <HOST>,
+failregex = ^\s*\[[a-z]+\] \d+#\d+: \*\d+ limiting requests, excess: [\d\.]+ by zone "(?:%(ngx_limit_req_zones)s)", client: "<HOST>",
+ignoreregex =
+datepattern = {^LN-BEG}
+journalmatch = _SYSTEMD_UNIT=nginx.service + _COMM=nginx
+
+####### systemctl status fail2ban.service #######
+● fail2ban.service - Fail2Ban Service
+     Loaded: loaded (/usr/lib/systemd/system/fail2ban.service; disabled; preset: disabled)
+     Active: active (running) since Wed 2026-07-22 17:46:52 MSK; 27min ago
+       Docs: man:fail2ban(1)
+    Process: 329904 ExecStartPre=/bin/mkdir -p /run/fail2ban (code=exited, status=0/SUCCESS)
+    Process: 357275 ExecReload=/usr/bin/fail2ban-client reload (code=exited, status=0/SUCCESS)
+   Main PID: 329905 (fail2ban-server)
+      Tasks: 5 (limit: 8816)
+     Memory: 19.0M (peak: 23.0M)
+        CPU: 17.963s
+     CGroup: /system.slice/fail2ban.service
+             └─329905 /usr/bin/python3 -s /usr/bin/fail2ban-server -xf start
+
+Jul 22 17:46:52 angie-test1 systemd[1]: Starting Fail2Ban Service...
+Jul 22 17:46:52 angie-test1 systemd[1]: Started Fail2Ban Service.
+Jul 22 17:46:52 angie-test1 fail2ban-server[329905]: Server ready
+Jul 22 18:01:03 angie-test1 systemd[1]: Reloading Fail2Ban Service...
+Jul 22 18:01:04 angie-test1 fail2ban-client[357275]: OK
+Jul 22 18:01:04 angie-test1 systemd[1]: Reloaded Fail2Ban Service.
+##############
+
+####### fail2ban-client status nginx-limit-req #######
+Status for the jail: nginx-limit-req
+|- Filter
+|  |- Currently failed: 0
+|  |- Total failed:     34149
+|  `- File list:        /var/log/angie/error.log
+`- Actions
+   |- Currently banned: 1
+   |- Total banned:     1
+   `- Banned IP list:   10.97.138.142
+##############
